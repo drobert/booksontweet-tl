@@ -48,8 +48,9 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       .drop(offset)
       .through(text.utf8Decode)
       .segmentN(chunkSize)
-      .map(s => s.mapConcat(Chunk.singleton(_)).force.toVector.reduce(_ + _))
-      .map(l => s"Tweet: $l\n")
+      .map(_.mapConcat(Chunk.singleton(_)).force.toVector.reduce(_ + _))
+      .mapAccumulate(0)((i, v) => (i + 1) -> v)
+      .map { case (i, s) => s"Tweet #$i: $s\n" }
       .take(max)
       .through(text.utf8Encode)
       .to(io.stdout)
@@ -57,10 +58,6 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
 
     val result: Stream[F, ExitCode] =
       Stream.eval(F.pure((ExitCode.Success: ExitCode)))
-
-//    val combined: Stream[F, ExitCode] = book.append(result)
-//
-//    combined
 
     book ++ result
   }
