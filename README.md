@@ -19,7 +19,7 @@ Why metamorphosis?
 
 Several reasons:
 1. it's relatively short (back-of-napkin calculations I vaguely recall from years ago resulted in a tweet every ~15 minutes completing the book within a week or two)
-2. it amuses this author to know end to discover bugs while reading about a man who wakes up to discover he's become a bug. Extra funny during late coding nights
+2. it amuses this author to no end to discover bugs while reading about a man who wakes up to discover he's become a bug. Extra funny during late coding nights
 
 Sample Output
 -------------
