@@ -3,7 +3,7 @@ Books On Tweet
 
 Forked from the *Unofficial Giter8 template for the Typelevel Stack*, this project is an ongoing self-tutorial project to learn Typelevel technologies while implementing a hilarious "Books on Tweet".
 
-The project: Using public domain books in UTF-* .txt format from [Project Gutenberg](http://www.gutenberg.org/), parse them and tweet them, 140 characters at a time. 
+The project: Using public domain books in UTF-8 .txt format from [Project Gutenberg](http://www.gutenberg.org/), parse them and tweet them, 140 characters at a time. 
 
 The first project will be using Kafka's Metamorphosis so all parsing logic is somewhat hard-coded to this copy to start.
 
