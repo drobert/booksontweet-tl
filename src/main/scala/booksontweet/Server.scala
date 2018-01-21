@@ -1,12 +1,10 @@
 package booksontweet
 
-//import cats.effect.{Effect, IO}
 import java.io.File
 
 import cats.effect._
-import cats.implicits.{catsSyntaxFlatMapOps => _, _}
 import fs2.StreamApp.ExitCode
-import fs2.{Chunk, Pipe, Pull, Scheduler, Stream, StreamApp, io, text}
+import fs2.{Pipe, Pull, Scheduler, Stream, StreamApp, io, text}
 import org.http4s.server.blaze.BlazeBuilder
 import java.nio.file.Paths
 
@@ -38,10 +36,6 @@ sealed trait BookPart extends Any {
   def length(): Int
 }
 
-object BookPart {
-  implicit val catsEq: Eq[BookPart] = _ == _
-}
-
 case object Paragraph extends BookPart {
   override val toString: String = " ¶"
   override val length: Int = 3
@@ -66,7 +60,7 @@ case class BookTweet(bps: IndexedSeq[BookPart]) {
 }
 
 class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
-  import ExecutionContext.Implicits.global
+//  import ExecutionContext.Implicits.global
 
   def untilChunkSize[F[_]](size: Int): Pipe[F, BookPart, BookTweet] = {
 
