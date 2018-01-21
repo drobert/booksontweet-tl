@@ -108,7 +108,7 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       else ClassLoader.getSystemResource("kafka-metamorphosis.txt").toURI()
     val offset = if (args.length > 1) args(1).toInt else 873
     val chunkSize = if (args.length > 2) args(2).toInt else 140
-    val max = if (args.length > 3) args(3).toInt else 100
+    val max = if (args.length > 3) args(3).toInt else 25
 
     println(s"Running for path '$path' @ +$offset by $chunkSize ...")
 
