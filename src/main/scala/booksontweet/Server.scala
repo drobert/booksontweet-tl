@@ -1,6 +1,8 @@
 package booksontweet
 
 //import cats.effect.{Effect, IO}
+import java.io.File
+
 import cats.effect._
 import cats.implicits.{catsSyntaxFlatMapOps => _, _}
 import fs2.StreamApp.ExitCode
@@ -41,24 +43,24 @@ object BookPart {
 }
 
 case object Paragraph extends BookPart {
-  override val toString: String = " ¶ "
+  override val toString: String = " ¶"
   override val length: Int = 3
 }
 
 case class Chapter(id: String) extends AnyVal with BookPart {
-  override def toString(): String = s"*Ch $id*: "
+  override def toString(): String = s"**Ch $id**"
   override def length(): Int = toString.length
 }
 
 case class Text(copy: String) extends AnyVal with BookPart {
-  override def toString(): String = copy.toString + " "
+  override def toString(): String = " " + copy.toString
   override def length(): Int = toString.length()
 }
 
 case class BookTweet(bps: IndexedSeq[BookPart]) {
   def length(): Int = bps.map(_.length).sum
   lazy val toTweet: String = bps.mkString
-  override lazy val toString: String = s"[${length} chars] $toTweet"
+  override lazy val toString: String = s"[${length} chars]$toTweet"
 
   def :+(bp: BookPart): BookTweet = BookTweet(bps :+ bp)
 }
@@ -79,16 +81,16 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
           val (bt, carry) =
             parts.foldLeft(BookTweet(buffer), Vector.empty[BookPart]) {
               case ((bt, c), bp) =>
-                if (bt.length >= size) bt -> (c :+ bp)
+                if (!c.isEmpty) bt -> (c :+ bp)
                 else {
                   val newBt = bt :+ bp
-                  if (newBt.length >= size) bt -> (c :+ bp)
+                  if (newBt.length >= size) bt -> Vector(bp)
                   else newBt -> c
                 }
             }
 
           if (!carry.isEmpty) Pull.output1(bt) >> go(carry, s)
-          else go(buffer ++ parts, s)
+          else go(bt.bps.toVector, s)
         case None if buffer.nonEmpty =>
           Pull.output1(BookTweet(buffer)) >> Pull.pure(None)
         case None => Pull.pure(None)
@@ -101,10 +103,12 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
 
   override def stream(args: List[String],
                       requestShutdown: F[Unit]): Stream[F, ExitCode] = {
-    val path = args.head
-    val offset = if (args.length > 1) args(1).toInt else 0
+    val path =
+      if (!args.isEmpty) new File(args(0)).toURI
+      else ClassLoader.getSystemResource("kafka-metamorphosis.txt").toURI()
+    val offset = if (args.length > 1) args(1).toInt else 873
     val chunkSize = if (args.length > 2) args(2).toInt else 140
-    val max = if (args.length > 3) args(3).toInt else 25
+    val max = if (args.length > 3) args(3).toInt else 100
 
     println(s"Running for path '$path' @ +$offset by $chunkSize ...")
 
@@ -117,10 +121,17 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
         l match {
           case p if p.isEmpty                 => Paragraph
           case c if c.matches("^[IVXLDCM]+$") => Chapter(c)
-          case _                              => Text(l)
+          case _                              => Text(l.trim)
       })
-      .unchunk
-      .changes
+      // NOTE: won't help for Paragraph -> Chapter
+      .filterWithPrevious {
+        case (a, b) =>
+          (a, b) match {
+            case (Chapter(_), Paragraph) => false
+            case (Paragraph, Paragraph)  => false
+            case _                       => true
+          }
+      }
       .through[BookTweet](untilChunkSize(chunkSize))
       .mapAccumulate(0)((i, v) => (i + 1) -> v)
       .map { case (i, s) => s"Tweet #$i: $s\n" }
@@ -128,20 +139,6 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       .through(text.utf8Encode)
       .to(io.stdout)
       .drain
-//      .repartition(
-//        v =>
-//          Chunk.indexedSeq(
-//            v.replaceAll("[\\r\\n]+", " \\ ")
-//              .replaceAll("\\s+", " ")
-//              .grouped(chunkSize)
-//              .filterNot(_.isEmpty)
-//              .toVector))
-//      .mapAccumulate(0)((i, v) => (i + 1) -> v)
-//      .map { case (i, s) => s"Tweet #$i: $s\n" }
-//      .take(max)
-//      .through(text.utf8Encode)
-//      .to(io.stdout)
-//      .drain
 
     val result: Stream[F, ExitCode] =
       Stream.eval(F.pure((ExitCode.Success: ExitCode)))
