@@ -8,7 +8,7 @@ import fs2.{Chunk, Pipe, Pull, Scheduler, Stream, StreamApp, io, text}
 import org.http4s.server.blaze.BlazeBuilder
 import java.nio.file.Paths
 
-import cats.Applicative
+import cats.{Applicative, Eq}
 
 import scala.concurrent.ExecutionContext
 
@@ -36,13 +36,17 @@ sealed trait BookPart extends Any {
   def length(): Int
 }
 
+object BookPart {
+  implicit val catsEq: Eq[BookPart] = _ == _
+}
+
 case object Paragraph extends BookPart {
   override val toString: String = " ¶ "
   override val length: Int = 3
 }
 
 case class Chapter(id: String) extends AnyVal with BookPart {
-  override def toString(): String = s"Ch $id : \\ "
+  override def toString(): String = s"*Ch $id*: "
   override def length(): Int = toString.length
 }
 
@@ -56,6 +60,7 @@ case class BookTweet(bps: IndexedSeq[BookPart]) {
   lazy val toTweet: String = bps.mkString
   override lazy val toString: String = s"[${length} chars] $toTweet"
 
+  def :+(bp: BookPart): BookTweet = BookTweet(bps :+ bp)
 }
 
 class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
@@ -67,11 +72,23 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
            s: Stream[F, BookPart]): Pull[F, BookTweet, Option[Unit]] = {
       s.pull.unconsChunk.flatMap {
         case Some((chunk, s)) =>
-          // TODO: pull one element from the vector in at a time
-          val parts = chunk.toVector
-          val bt = BookTweet(buffer ++ parts)
-          if (bt.length > size) Pull.output1(BookTweet(buffer)) >> go(parts, s)
-          else go(bt.bps.toVector, s)
+          val parts = chunk.toVector.flatMap {
+            case Text(c) => c.split(" ").toVector.map(Text(_))
+            case p       => Vector(p)
+          }
+          val (bt, carry) =
+            parts.foldLeft(BookTweet(buffer), Vector.empty[BookPart]) {
+              case ((bt, c), bp) =>
+                if (bt.length >= size) bt -> (c :+ bp)
+                else {
+                  val newBt = bt :+ bp
+                  if (newBt.length >= size) bt -> (c :+ bp)
+                  else newBt -> c
+                }
+            }
+
+          if (!carry.isEmpty) Pull.output1(bt) >> go(carry, s)
+          else go(buffer ++ parts, s)
         case None if buffer.nonEmpty =>
           Pull.output1(BookTweet(buffer)) >> Pull.pure(None)
         case None => Pull.pure(None)
@@ -87,7 +104,7 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
     val path = args.head
     val offset = if (args.length > 1) args(1).toInt else 0
     val chunkSize = if (args.length > 2) args(2).toInt else 140
-    val max = if (args.length > 3) args(3).toInt else 5
+    val max = if (args.length > 3) args(3).toInt else 25
 
     println(s"Running for path '$path' @ +$offset by $chunkSize ...")
 
@@ -102,6 +119,8 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
           case c if c.matches("^[IVXLDCM]+$") => Chapter(c)
           case _                              => Text(l)
       })
+      .unchunk
+      .changes
       .through[BookTweet](untilChunkSize(chunkSize))
       .mapAccumulate(0)((i, v) => (i + 1) -> v)
       .map { case (i, s) => s"Tweet #$i: $s\n" }
