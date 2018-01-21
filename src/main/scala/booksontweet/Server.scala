@@ -111,20 +111,16 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       .drop(offset)
       .through(text.utf8Decode)
       .through(text.lines)
-      .map[BookPart](l =>
-        l match {
-          case p if p.isEmpty                 => Paragraph
-          case c if c.matches("^[IVXLDCM]+$") => Chapter(c)
-          case _                              => Text(l.trim)
-      })
+      .map[BookPart] {
+        case p if p.isEmpty                 => Paragraph
+        case c if c.matches("^[IVXLDCM]+$") => Chapter(c)
+        case l                              => Text(l.trim)
+      }
       // NOTE: won't help for Paragraph -> Chapter
       .filterWithPrevious {
-        case (a, b) =>
-          (a, b) match {
-            case (Chapter(_), Paragraph) => false
-            case (Paragraph, Paragraph)  => false
-            case _                       => true
-          }
+        case (Chapter(_), Paragraph) => false
+        case (Paragraph, Paragraph)  => false
+        case _                       => true
       }
       .through[BookTweet](untilChunkSize(chunkSize))
       .mapAccumulate(0)((i, v) => (i + 1) -> v)
