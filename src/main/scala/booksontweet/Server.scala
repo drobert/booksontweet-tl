@@ -4,7 +4,7 @@ import java.io.File
 
 import cats.effect._
 import fs2.StreamApp.ExitCode
-import fs2.{Pipe, Pull, Scheduler, Stream, StreamApp, io, text}
+import fs2.{Chunk, Pipe, Pull, Scheduler, Segment, Stream, StreamApp, io, text}
 import org.http4s.server.blaze.BlazeBuilder
 import java.nio.file.Paths
 
@@ -30,7 +30,7 @@ class HttpServer[F[_]: Effect] extends StreamApp[F] {
 
 }
 
-object Runner extends CliRunner[IO]
+// TODO: move this to a 'model' package
 
 sealed trait BookPart extends Any {
   def length(): Int
@@ -42,7 +42,7 @@ case object Paragraph extends BookPart {
 }
 
 case class Chapter(id: String) extends AnyVal with BookPart {
-  override def toString(): String = s"**Ch $id**"
+  override def toString(): String = s" **Ch $id**"
   override def length(): Int = toString.length
 }
 
@@ -52,15 +52,36 @@ case class Text(copy: String) extends AnyVal with BookPart {
 }
 
 case class BookTweet(bps: IndexedSeq[BookPart]) {
-  def length(): Int = bps.map(_.length).sum
-  lazy val toTweet: String = bps.mkString
-  override lazy val toString: String = s"[${length} chars]$toTweet"
+  def length(): Int = toTweet.length
+  lazy val toTweet: String = bps.mkString.trim
+  override lazy val toString: String = s"[${length} chars] $toTweet"
 
   def :+(bp: BookPart): BookTweet = BookTweet(bps :+ bp)
 }
 
-class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
-//  import ExecutionContext.Implicits.global
+// TODO: move internal book parsing logic outside of CLI/Runner/Server
+object StreamUtils {
+  import scala.language.implicitConversions
+
+  implicit def InvariantOps2[F[_], O](s: Stream[F, O]): InvariantOps2[F, O] =
+    new InvariantOps2(s)
+
+  final class InvariantOps2[F[_], O](stream: Stream[F, O]) {
+    def filterPrevious(f: (O, O) => Boolean): Stream[F, O] = {
+      def go(last: O, s: Stream[F, O]): Pull[F, O, Option[Unit]] =
+        s.pull.uncons1.flatMap {
+          case None =>
+            Pull.output1(last) >> Pull.pure[F, Option[Unit]](Option.empty[Unit])
+          case Some((hd, tl)) =>
+            if (f(last, hd)) Pull.output1(last) >> go(hd, tl) else go(hd, tl)
+        }
+
+      stream.pull.uncons1.flatMap {
+        case None           => Pull.pure(None)
+        case Some((hd, tl)) => go(hd, tl)
+      }.stream
+    }
+  }
 
   def untilChunkSize[F[_]](size: Int): Pipe[F, BookPart, BookTweet] = {
 
@@ -94,21 +115,33 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
     s =>
       go(Vector.empty, s).stream
   }
+}
+
+object Runner extends CliRunner[IO]
+
+class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
+  import StreamUtils._
 
   override def stream(args: List[String],
                       requestShutdown: F[Unit]): Stream[F, ExitCode] = {
+    // TODO: build a 'BookConfig' class, encapsulating all of the following
+    // per book, plus distinct chapter parsers, etc.
+    // ...need a larger sample size
+
     val path =
       if (!args.isEmpty) new File(args(0)).toURI
       else ClassLoader.getSystemResource("kafka-metamorphosis.txt").toURI()
     val offset = if (args.length > 1) args(1).toInt else 873
     val chunkSize = if (args.length > 2) args(2).toInt else 140
-    val max = if (args.length > 3) args(3).toInt else 25
+    val max = if (args.length > 3) args(3).toInt else Integer.MAX_VALUE
+    val totalBytes = if (args.length > 4) args(4).toInt else 121988 - 873
 
     println(s"Running for path '$path' @ +$offset by $chunkSize ...")
 
     val book: Stream[F, ExitCode] = io.file
-      .readAll(Paths.get(path), 2048)
-      .drop(offset)
+      .readAll(Paths.get(path), 2048) // TODO: think through '2048'
+      .drop(offset) // TODO: per book config
+      .take(totalBytes) // TODO: per book config
       .through(text.utf8Decode)
       .through(text.lines)
       .map[BookPart] {
@@ -120,6 +153,12 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       .filterWithPrevious {
         case (Chapter(_), Paragraph) => false
         case (Paragraph, Paragraph)  => false
+        case _                       => true
+      }
+      // NOTE: will totally help for Paragraph -> Chapter
+      .filterPrevious {
+        case (Paragraph, Paragraph)  => false
+        case (Paragraph, Chapter(_)) => false
         case _                       => true
       }
       .through[BookTweet](untilChunkSize(chunkSize))
