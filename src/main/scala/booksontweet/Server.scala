@@ -59,7 +59,7 @@ case class BookTweet(bps: IndexedSeq[BookPart]) {
   def :+(bp: BookPart): BookTweet = BookTweet(bps :+ bp)
 }
 
-// TODO: move internal book parsing logic outside of CLI/Runner/Server
+// TODO move elsewhere
 object StreamUtils {
   import scala.language.implicitConversions
 
@@ -69,9 +69,9 @@ object StreamUtils {
   final class InvariantOps2[F[_], O](stream: Stream[F, O]) {
     def filterPrevious(f: (O, O) => Boolean): Stream[F, O] = {
       def go(last: O, s: Stream[F, O]): Pull[F, O, Option[Unit]] =
-        s.pull.uncons1.flatMap {
+        s.pull.uncons1.flatMap { // TODO: more efficient than repeated uncons1?
           case None =>
-            Pull.output1(last) >> Pull.pure[F, Option[Unit]](Option.empty[Unit])
+            Pull.output1(last) >> Pull.pure(None)
           case Some((hd, tl)) =>
             if (f(last, hd)) Pull.output1(last) >> go(hd, tl) else go(hd, tl)
         }
@@ -83,7 +83,7 @@ object StreamUtils {
     }
   }
 
-  def untilChunkSize[F[_]](size: Int): Pipe[F, BookPart, BookTweet] = {
+  def untilTweetLength[F[_]](size: Int): Pipe[F, BookPart, BookTweet] = {
 
     def go(buffer: Vector[BookPart],
            s: Stream[F, BookPart]): Pull[F, BookTweet, Option[Unit]] = {
@@ -119,6 +119,7 @@ object StreamUtils {
 
 object Runner extends CliRunner[IO]
 
+// TODO: move internal book parsing logic outside of CLI/Runner/Server
 class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
   import StreamUtils._
 
@@ -132,11 +133,11 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
       if (!args.isEmpty) new File(args(0)).toURI
       else ClassLoader.getSystemResource("kafka-metamorphosis.txt").toURI()
     val offset = if (args.length > 1) args(1).toInt else 873
-    val chunkSize = if (args.length > 2) args(2).toInt else 140
-    val max = if (args.length > 3) args(3).toInt else Integer.MAX_VALUE
+    val maxTweetLength = if (args.length > 2) args(2).toInt else 140
+    val max = if (args.length > 3) args(3).toInt else 25
     val totalBytes = if (args.length > 4) args(4).toInt else 121988 - 873
 
-    println(s"Running for path '$path' @ +$offset by $chunkSize ...")
+    println(s"Running for path '$path' @ +$offset by $maxTweetLength ...")
 
     val book: Stream[F, ExitCode] = io.file
       .readAll(Paths.get(path), 2048) // TODO: think through '2048'
@@ -161,7 +162,7 @@ class CliRunner[F[_]: Effect](implicit F: Applicative[F]) extends StreamApp[F] {
         case (Paragraph, Chapter(_)) => false
         case _                       => true
       }
-      .through[BookTweet](untilChunkSize(chunkSize))
+      .through[BookTweet](untilTweetLength(maxTweetLength))
       .mapAccumulate(0)((i, v) => (i + 1) -> v)
       .map { case (i, s) => s"Tweet #$i: $s\n" }
       .take(max)
